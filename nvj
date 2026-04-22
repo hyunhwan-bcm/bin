@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# Usage: ./new_vscode_project.sh <project-name>
+set -e
+
+if [ -z "$1" ]; then
+  echo "Usage: $0 <project-name>"
+  exit 1
+fi
+
+PROJ_DIR="$1"
+NOTEBOOK_NAME="analysis.ipynb"
+
+# 1. Create project directory
+mkdir -p "$PROJ_DIR"
+cd "$PROJ_DIR"
+
+# 2. Create an empty notebook
+cat <<EOF > "$NOTEBOOK_NAME"
+{
+ "cells": [],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+EOF
+
+# 3. Initialize Git repo
+git init
+git add "$NOTEBOOK_NAME"
+git commit -m "Initial commit with empty notebook"
+
+# 4. Create VS Code settings for auto-commit (via Auto Commit extension)
+mkdir -p .vscode
+cat <<EOF > .vscode/settings.json
+{
+  "git-commit.message": "auto: save snapshot",
+  "git-commit.onSave": true,
+  "git-commit.autoStage": true
+}
+EOF
+
+# 5. Optional: Install nbstripout if available
+if command -v nbstripout >/dev/null 2>&1; then
+  nbstripout --install
+  echo "✅ nbstripout enabled for this repo"
+else
+  echo "ℹ️  nbstripout not installed; skipping output-stripping setup"
+fi
+
+# 6. Launch VS Code
+code .
+

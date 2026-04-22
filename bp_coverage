@@ -1,0 +1,2 @@
+#!/bin/bash
+bedtools merge -i <(sort -k1,1 -k2,2n $1) | awk '{print $3-$2}' | paste -s -d+ - | bc

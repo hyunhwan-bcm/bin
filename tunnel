@@ -1,0 +1,176 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ZROK_BIN="${SCRIPT_DIR}/zrok2"
+SHARE_TOKEN="${ZROK_SHARE_TOKEN:?ZROK_SHARE_TOKEN is not set; export it (e.g., in ~/.zsh_extra)}"
+HOST="127.0.0.1"
+PORT="2222"
+SSH_USER="sagemaker-user"
+PIDFILE="${TMPDIR:-/tmp}/tunnel-zrok2.pid"
+LOGFILE="${TMPDIR:-/tmp}/tunnel-zrok2.log"
+
+usage() {
+  cat <<'EOF'
+Usage: tunnel [start|stop|status|logs|connect]
+
+Commands:
+  start    Start the zrok tunnel in the background using nohup
+  stop     Stop the background zrok tunnel
+  status   Show whether the background zrok tunnel is running
+  logs     Tail the zrok tunnel log
+  connect  Start the tunnel if needed, then open SSH
+
+Default command: connect
+EOF
+}
+
+require_bin() {
+  if [[ ! -x "${ZROK_BIN}" ]]; then
+    echo "Missing executable: ${ZROK_BIN}" >&2
+    exit 1
+  fi
+}
+
+pid_from_file() {
+  if [[ -f "${PIDFILE}" ]]; then
+    cat "${PIDFILE}"
+  fi
+}
+
+is_pid_running() {
+  local pid="${1:-}"
+  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
+}
+
+cleanup_stale_pidfile() {
+  local pid
+  pid="$(pid_from_file)"
+  if [[ -n "${pid}" ]] && ! is_pid_running "${pid}"; then
+    rm -f "${PIDFILE}"
+  fi
+}
+
+wait_for_tunnel() {
+  local attempts=30
+  local pid
+  pid="$(pid_from_file)"
+
+  while (( attempts > 0 )); do
+    if [[ -f "${LOGFILE}" ]] && grep -q "access the zrok share at the following endpoint: tcp://${HOST}:${PORT}" "${LOGFILE}"; then
+      return 0
+    fi
+    if [[ -n "${pid}" ]] && ! is_pid_running "${pid}"; then
+      echo "Tunnel process exited. Check logs: ${LOGFILE}" >&2
+      return 1
+    fi
+    sleep 1
+    ((attempts--))
+  done
+
+  echo "Tunnel did not become ready in time. Check logs: ${LOGFILE}" >&2
+  return 1
+}
+
+start_tunnel() {
+  local pid
+
+  require_bin
+  cleanup_stale_pidfile
+  pid="$(pid_from_file)"
+
+  if [[ -n "${pid}" ]] && is_pid_running "${pid}"; then
+    echo "Tunnel already running with PID ${pid}"
+    return 0
+  fi
+
+  : > "${LOGFILE}"
+  nohup "${ZROK_BIN}" access private "${SHARE_TOKEN}" \
+    --bind "${HOST}:${PORT}" \
+    --headless </dev/null >>"${LOGFILE}" 2>&1 &
+  pid="$!"
+  echo "${pid}" > "${PIDFILE}"
+  disown "${pid}" 2>/dev/null || true
+
+  wait_for_tunnel
+  echo "Tunnel started with PID ${pid}"
+}
+
+stop_tunnel() {
+  local pid
+
+  cleanup_stale_pidfile
+  pid="$(pid_from_file)"
+
+  if [[ -z "${pid}" ]]; then
+    echo "Tunnel is not running"
+    return 0
+  fi
+
+  kill "${pid}" 2>/dev/null || true
+
+  for _ in {1..10}; do
+    if ! is_pid_running "${pid}"; then
+      rm -f "${PIDFILE}"
+      echo "Tunnel stopped"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "Tunnel PID ${pid} did not stop cleanly" >&2
+  return 1
+}
+
+status_tunnel() {
+  local pid
+
+  cleanup_stale_pidfile
+  pid="$(pid_from_file)"
+
+  if [[ -n "${pid}" ]] && is_pid_running "${pid}"; then
+    echo "Tunnel is running with PID ${pid}"
+    return 0
+  fi
+
+  echo "Tunnel is not running"
+}
+
+logs_tunnel() {
+  touch "${LOGFILE}"
+  exec tail -f "${LOGFILE}"
+}
+
+connect_ssh() {
+  start_tunnel
+  exec ssh -p "${PORT}" "${SSH_USER}@${HOST}"
+}
+
+command="${1:-connect}"
+
+case "${command}" in
+  start)
+    start_tunnel
+    ;;
+  stop)
+    stop_tunnel
+    ;;
+  status)
+    status_tunnel
+    ;;
+  logs)
+    logs_tunnel
+    ;;
+  connect)
+    connect_ssh
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    echo "Unknown command: ${command}" >&2
+    usage >&2
+    exit 1
+    ;;
+esac

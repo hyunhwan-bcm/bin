@@ -1,0 +1,17 @@
+#!/bin/bash
+
+F1=$1
+F2=$2
+
+C1=$(bp_coverage $F1)
+C2=$(bp_coverage $F2)
+
+UNI=$(bp_coverage <(cat $F1 $F2 | sort -k1,1 -k2,2n))
+INT=$(bp_coverage <(bedtools intersect -a $F1 -b $F2 | sort -k1,1 -k2,2n))
+printf "A: %s\t%d\n" $F1 $C1
+printf "B: %s\t%d\n" $F2 $C2
+printf "union\t%d\n" $UNI
+printf "intersect\t%d\n" $INT
+printf "A covered by B\t%.2f%%\n" $(bc <<< "scale=2; $INT / $C1 * 100")
+printf "B covered by A\t%.2f%%\n" $(bc <<< "scale=2; $INT / $C2 * 100")
+# set filetype=bash sts=2 ts=2 sw=2 
